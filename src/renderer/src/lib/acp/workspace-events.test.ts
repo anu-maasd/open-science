@@ -3508,36 +3508,49 @@ describe('workspace runtime events', () => {
   })
 
   describe('auto-review gate on stop event', () => {
-    it('reviews a terminal commit already hydrated before its lifecycle echo exactly once', async () => {
-      const reviewerRun = vi.fn().mockResolvedValue({ started: true })
-      stubReviewerApi(reviewerRun)
-      const store = useSessionStore.getState()
-      store.setAutoReviewEnabled('transport-session-1', true)
-      store.appendAgentMessageChunk({
-        sessionId: 'transport-session-1',
-        streamId: 'stream-1',
-        eventId: 'main-answer',
-        content: 'Analysis complete'
-      })
-      const run = store.sessions[0].activeRun!
-      store.finishRun('transport-session-1', undefined, run.promptMessageId)
-      const committed = {
-        ...toPersistedSession(useSessionStore.getState().sessions[0]),
-        runtimeTranscriptOwner: 'main' as const,
-        runtimeTranscriptLastRun: run,
-        runtimeTranscriptReviewOwner: {
-          promptMessageId: run.promptMessageId,
-          owner: 'renderer' as const
+    it.each([false, true])(
+      'reviews a hydrated terminal commit exactly once, quit aborted=%s',
+      async (quitAborted) => {
+        const reviewerRun = vi.fn().mockResolvedValue({ started: true })
+        stubReviewerApi(reviewerRun)
+        const store = useSessionStore.getState()
+        store.setAutoReviewEnabled('transport-session-1', true)
+        store.appendAgentMessageChunk({
+          sessionId: 'transport-session-1',
+          streamId: 'stream-1',
+          eventId: 'main-answer',
+          content: 'Analysis complete'
+        })
+        const run = store.sessions[0].activeRun!
+        store.finishRun('transport-session-1', undefined, run.promptMessageId)
+        const committed = {
+          ...toPersistedSession(useSessionStore.getState().sessions[0]),
+          runtimeTranscriptOwner: 'main' as const,
+          runtimeTranscriptLastRun: run,
+          runtimeTranscriptReviewOwner: {
+            promptMessageId: run.promptMessageId,
+            owner: 'renderer' as const
+          }
         }
+        const hydrated = {
+          ...useSessionStore.getState().sessions[0],
+          runtimeTranscriptLastRun: run
+        }
+        if (quitAborted) {
+          suppressAutoReviewsForQuit()
+          scheduleCommittedRuntimeTranscriptAutoReview(hydrated, committed)
+          await vi.runAllTimersAsync()
+          expect(reviewerRun).not.toHaveBeenCalled()
+          resumeAutoReviewsAfterQuitAbort()
+        }
+        scheduleCommittedRuntimeTranscriptAutoReview(hydrated, committed)
+        await vi.runAllTimersAsync()
+        scheduleCommittedRuntimeTranscriptAutoReview(hydrated, committed)
+        await vi.runAllTimersAsync()
+        expect(reviewerRun).toHaveBeenCalledTimes(1)
+        vi.unstubAllGlobals()
       }
-      const hydrated = { ...useSessionStore.getState().sessions[0], runtimeTranscriptLastRun: run }
-      scheduleCommittedRuntimeTranscriptAutoReview(hydrated, committed)
-      await vi.runAllTimersAsync()
-      scheduleCommittedRuntimeTranscriptAutoReview(hydrated, committed)
-      await vi.runAllTimersAsync()
-      expect(reviewerRun).toHaveBeenCalledTimes(1)
-      vi.unstubAllGlobals()
-    })
+    )
 
     it.each([
       ['renderer', 1, false],

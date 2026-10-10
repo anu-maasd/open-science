@@ -664,6 +664,7 @@ const scheduleCommittedRuntimeTranscriptAutoReview = (
   previous: ChatSession | undefined,
   committed: PersistedChatSession
 ): void => {
+  if (autoReviewsSuppressedForQuit) return
   if (previous && sessionRevision(committed) < sessionRevision(previous)) return
   const completedRun = committed.runtimeTranscriptLastRun
   const reviewOwner = committed.runtimeTranscriptReviewOwner
