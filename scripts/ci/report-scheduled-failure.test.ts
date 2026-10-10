@@ -21,7 +21,7 @@ const trackingIssue = {
 }
 
 type Fixture = {
-  github: { paginate: Mock; rest: { issues: Record<string, Mock> } }
+  github: { paginate: Mock; rest: { issues: Record<string, Mock>; repos: { get: Mock } } }
   repo: typeof repo
   log: Mock
   issues: Record<string, Mock>
@@ -41,10 +41,42 @@ function fixture({
   const paginate = vi.fn(async (endpoint: Mock) =>
     endpoint === rest.listForRepo ? issues : endpoint === rest.listComments ? comments : []
   )
-  return { github: { paginate, rest: { issues: rest } }, repo, log: vi.fn(), issues: rest }
+  return {
+    github: {
+      paginate,
+      rest: {
+        issues: rest,
+        repos: { get: vi.fn().mockResolvedValue({ data: { has_issues: true } }) }
+      }
+    },
+    repo,
+    log: vi.fn(),
+    issues: rest
+  }
 }
 
 describe('scheduled failure tracking issues', () => {
+  it.each(['success', 'failure'])(
+    'reports disabled tracking explicitly on %s',
+    async (conclusion) => {
+      const f = fixture()
+      f.github.rest.repos.get.mockResolvedValue({ data: { has_issues: false } })
+      expect(await reportScheduledOutcome({ ...f, ...run, conclusion })).toEqual({
+        action: 'disabled'
+      })
+      expect(f.log).toHaveBeenCalledWith(expect.stringContaining('::warning::'))
+      expect(f.github.paginate).not.toHaveBeenCalled()
+      expect(f.issues.create).not.toHaveBeenCalled()
+    }
+  )
+
+  it('propagates repository lookup errors instead of hiding them', async () => {
+    const f = fixture()
+    f.github.rest.repos.get.mockRejectedValue(new Error('lookup failed'))
+    await expect(reportScheduledOutcome({ ...f, ...run, conclusion: 'failure' })).rejects.toThrow(
+      'lookup failed'
+    )
+  })
   it('opens a labelled tracking issue on the first failure', async () => {
     const f = fixture()
     expect(await reportScheduledOutcome({ ...f, ...run, conclusion: 'failure' })).toEqual({

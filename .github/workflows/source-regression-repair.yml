@@ -1,0 +1,38 @@
+name: Source Regression repair verification
+on:
+  push:
+    branches: [fix/source-regression-pdf-tracking]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: source-regression-repair-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  focused:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - run: node scripts/ci/npm-ci.mjs
+      - run: npx vitest run scripts/ci/report-scheduled-failure.test.ts
+      - run: npm run build:e2e
+      - run: npx playwright install chromium --only-shell
+      - name: PDF and auto-review regressions
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/repair.json
+        run: npx playwright test e2e/pdf-translation-pair.spec.ts e2e/pdf-workspace-translation.spec.ts e2e/auto-review-stop-resume.spec.ts --fail-on-flaky-tests --global-timeout=3000000
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: source-regression-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 5
+          path: |
+            test-results/
+            playwright-report/

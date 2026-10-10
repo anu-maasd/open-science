@@ -15,10 +15,32 @@ import { literatureItemInputSchema } from '../src/shared/literature'
 import { test } from './fixtures/electron-app'
 
 const openReadingView = async (page: Page): Promise<void> => {
+  // A floating translation sidebar covers the toolbar on narrow readers.
+  const sidebar = page.locator('[data-pdf-translation-sidebar]')
+  if (await sidebar.isVisible()) {
+    await sidebar.getByRole('button', { name: 'Close translation', exact: true }).click()
+    await expect(sidebar).toBeHidden()
+  }
   const trigger = page.getByRole('button', { name: 'Reading view', exact: true })
+  await expect(trigger).toBeEnabled({ timeout: 60000 })
   if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
 }
-const selectRendition = async (page: Page, name: string): Promise<void> => {
+const selectRendition = async (
+  page: Page,
+  name: 'Original' | 'Translation' | 'Compare'
+): Promise<void> => {
+  const sidebar = page.locator('[data-pdf-translation-sidebar]')
+  if (await sidebar.isVisible()) {
+    const labels = {
+      Original: 'Original PDF',
+      Translation: 'View translated PDF',
+      Compare: 'Compare PDFs'
+    }
+    const button = sidebar.getByRole('button', { name: labels[name], exact: true })
+    await expect(button).toBeEnabled({ timeout: 60000 })
+    await button.click()
+    return
+  }
   await openReadingView(page)
   await page
     .getByRole('group', { name: 'PDF rendition' })
@@ -481,11 +503,8 @@ for (const variant of [
     }
     if (variant === 'streaming-reading') {
       await expect(panel).toContainText('1 / 5')
-      await openReadingView(page)
       await expect(
-        page
-          .getByRole('group', { name: 'PDF rendition' })
-          .getByRole('button', { name: 'Translation', exact: true })
+        panel.getByRole('button', { name: 'View translated PDF', exact: true })
       ).toBeEnabled({ timeout: 60000 })
       await expect(originalCanvas).toHaveAttribute('data-stable-original', 'true')
       expect(await originalCanvas.evaluate((node: HTMLCanvasElement) => node.toDataURL())).toBe(
@@ -843,13 +862,7 @@ for (const variant of [
       await expect(failure).toContainText(
         'PDF generation is busy. Retry after another document finishes.'
       )
-      await openReadingView(page)
-      await expect(
-        page
-          .getByRole('group', { name: 'PDF rendition' })
-          .getByRole('button', { name: 'Compare', exact: true })
-      ).toBeEnabled()
-      await page.keyboard.press('Escape')
+      await expect(panel.getByRole('button', { name: 'Compare PDFs', exact: true })).toBeEnabled()
       await panel.getByRole('button', { name: 'Close translation', exact: true }).click()
       await expect(panel).toBeHidden()
       await expect(page.getByRole('alert')).toHaveCount(0)
