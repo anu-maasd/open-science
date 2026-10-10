@@ -202,14 +202,24 @@ const parseMcpResponse = (body) => {
   return json ? JSON.parse(json) : {}
 }
 
-const submitReviewerPass = async (mcpServers, prompt = '') => {
+const submitReviewerPass = async (mcpServers, prompt = '', agentSessionId) => {
   const server = mcpServers.find(
     (candidate) =>
-      candidate.type === 'http' &&
-      (candidate.name === 'open-science-reviewer' ||
-        candidate.name === frameworkServerName('open-science-reviewer'))
+      candidate.name === 'open-science-reviewer' ||
+      candidate.name === frameworkServerName('open-science-reviewer')
   )
-  if (!server?.url) return false
+  if (server?.command) {
+    return withMcpClient(agentSessionId, server.name, async (client) =>
+      submitReviewerFindings(async (name, args) => {
+        const result = await client.callTool({ name, arguments: args })
+        if (result.isError) {
+          throw new Error(result.content?.[0]?.text ?? `${name} returned an error`)
+        }
+        return result
+      }, prompt)
+    )
+  }
+  if (server?.type !== 'http' || !server.url) return false
   const token =
     server.headers
       ?.find((header) => header.name?.toLowerCase() === 'authorization')
@@ -265,6 +275,10 @@ const submitReviewerPass = async (mcpServers, prompt = '') => {
     }
     return payload.result
   }
+  return submitReviewerFindings(callTool, prompt)
+}
+
+const submitReviewerFindings = async (callTool, prompt) => {
   const turn = await callTool('read_turn', {})
   const blocks = JSON.parse(turn.content?.[0]?.text ?? '[]')
   const reproBlock = blocks.find(
@@ -2220,7 +2234,8 @@ if (process.argv.includes('--version')) {
         } else if (
           await submitReviewerPass(
             sessionRoutes.get(context.params.sessionId)?.mcpServers ?? [],
-            prompt
+            prompt,
+            context.params.sessionId
           )
         ) {
           reply = ''

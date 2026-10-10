@@ -3,6 +3,33 @@ import { test } from './fixtures/electron-app'
 
 test.use({ windowMode: 'normal' })
 
+test.afterEach(async ({ app }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return
+  const snapshot = await app.page
+    .evaluate(async () => ({
+      heading: document.querySelector('h1')?.textContent,
+      continuationLabels: [...document.querySelectorAll('button')]
+        .map((button) => button.textContent)
+        .filter((text) => text?.includes('Continued from chat')),
+      sessions: (await window.api.sessions.loadAll()).sessions.map((session) => ({
+        id: session.id,
+        number: session.number,
+        title: session.title,
+        branchSource: session.branchSource,
+        forkHeadMessageId: session.forkHeadMessageId,
+        forkOrigin: session.forkOrigin,
+        packageOrigin: session.packageOrigin,
+        messages: session.messages.map((message) => ({ id: message.id, role: message.role }))
+      })),
+      operation: await window.api.sessions.packageOperation({ action: 'snapshot' })
+    }))
+    .catch((error) => ({ diagnosticError: String(error) }))
+  await testInfo.attach('failure-fork-state', {
+    body: JSON.stringify(snapshot, null, 2),
+    contentType: 'application/json'
+  })
+})
+
 test('forks local and imported research and immediately continues through the real desktop lifecycle', async ({
   app
 }, testInfo) => {

@@ -63,6 +63,14 @@ export const useFollowScrollBottom = (
     if (!viewport) return
 
     let lastScrollTop = viewport.scrollTop
+    let lastScrollHeight = viewport.scrollHeight
+    let lastClientHeight = viewport.clientHeight
+
+    const rememberGeometry = (): void => {
+      lastScrollTop = viewport.scrollTop
+      lastScrollHeight = viewport.scrollHeight
+      lastClientHeight = viewport.clientHeight
+    }
 
     const clearAutoscroll = (): void => {
       if (autoscrollFrameRef.current === undefined) return
@@ -75,12 +83,12 @@ export const useFollowScrollBottom = (
       if (Math.abs(viewport.scrollTop - nextTop) <= 0.5) {
         // Layout can clamp the viewport to a shorter bottom without a programmatic write.
         // Record that offset before its delayed scroll event meets the next content resize.
-        lastScrollTop = viewport.scrollTop
+        rememberGeometry()
         return
       }
       autoscrollingRef.current = true
       viewport.scrollTop = nextTop
-      lastScrollTop = viewport.scrollTop
+      rememberGeometry()
       clearAutoscroll()
       autoscrollFrameRef.current = window.requestAnimationFrame(() => {
         autoscrollFrameRef.current = undefined
@@ -91,8 +99,15 @@ export const useFollowScrollBottom = (
     const handleScroll = (): void => {
       if (!enabledRef.current) return
       const atBottom = isAtFollowScrollBottom(viewport)
-      const movedUp = viewport.scrollTop < lastScrollTop - 0.5
-      lastScrollTop = viewport.scrollTop
+      // Content can clamp the old bottom before a viewport shrink and either resize
+      // notification. That delayed scroll is layout movement, even if the new bottom grew.
+      const clampedBottom = Math.max(0, viewport.scrollHeight - lastClientHeight)
+      const layoutClamped =
+        viewport.scrollHeight < lastScrollHeight &&
+        lastScrollTop > clampedBottom &&
+        viewport.scrollTop >= clampedBottom - 0.5
+      const movedUp = viewport.scrollTop < lastScrollTop - 0.5 && !layoutClamped
+      rememberGeometry()
       // A delayed scroll event can arrive after streamed content grew again. Its unchanged
       // offset is not a user departure; only an actual upward move suspends active follow.
       if (autoscrollingRef.current && !movedUp) return

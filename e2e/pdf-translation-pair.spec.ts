@@ -15,10 +15,32 @@ import { literatureItemInputSchema } from '../src/shared/literature'
 import { test } from './fixtures/electron-app'
 
 const openReadingView = async (page: Page): Promise<void> => {
+  // A floating translation sidebar covers the toolbar on narrow readers.
+  const sidebar = page.locator('[data-pdf-translation-sidebar]')
+  if (await sidebar.isVisible()) {
+    await sidebar.getByRole('button', { name: 'Close translation', exact: true }).click()
+    await expect(sidebar).toBeHidden()
+  }
   const trigger = page.getByRole('button', { name: 'Reading view', exact: true })
+  await expect(trigger).toBeEnabled({ timeout: 60000 })
   if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click()
 }
-const selectRendition = async (page: Page, name: string): Promise<void> => {
+const selectRendition = async (
+  page: Page,
+  name: 'Original' | 'Translation' | 'Compare'
+): Promise<void> => {
+  const sidebar = page.locator('[data-pdf-translation-sidebar]')
+  if (await sidebar.isVisible()) {
+    const labels = {
+      Original: 'Original PDF',
+      Translation: 'View translated PDF',
+      Compare: 'Compare PDFs'
+    }
+    const button = sidebar.getByRole('button', { name: labels[name], exact: true })
+    await expect(button).toBeEnabled({ timeout: 60000 })
+    await button.click()
+    return
+  }
   await openReadingView(page)
   await page
     .getByRole('group', { name: 'PDF rendition' })
@@ -481,11 +503,8 @@ for (const variant of [
     }
     if (variant === 'streaming-reading') {
       await expect(panel).toContainText('1 / 5')
-      await openReadingView(page)
       await expect(
-        page
-          .getByRole('group', { name: 'PDF rendition' })
-          .getByRole('button', { name: 'Translation', exact: true })
+        panel.getByRole('button', { name: 'View translated PDF', exact: true })
       ).toBeEnabled({ timeout: 60000 })
       await expect(originalCanvas).toHaveAttribute('data-stable-original', 'true')
       expect(await originalCanvas.evaluate((node: HTMLCanvasElement) => node.toDataURL())).toBe(
@@ -609,7 +628,14 @@ for (const variant of [
             '测量受控实验室培养物中的细胞生长。'
           )
           await expect(second.locator('[data-pdf-text-layer]')).toContainText('Cell growth')
-          await canvas.scrollIntoViewIfNeeded()
+          // Page virtualization can unmount page one's canvas while page two is visible.
+          const preview = page.getByRole('region', {
+            name: 'paired-reading.pdf scrollable preview'
+          })
+          const previewBounds = await preview.boundingBox()
+          await page.mouse.move(previewBounds!.x + previewBounds!.width / 2, previewBounds!.y + 100)
+          await page.mouse.wheel(0, -10000)
+          await expect.poll(() => preview.evaluate((node) => node.scrollTop)).toBe(0)
           await expect(
             page
               .locator('[data-pdf-translated-page]')
@@ -671,10 +697,11 @@ for (const variant of [
       expect(directRequests).toHaveLength(requestsBeforeRetry + 1)
       await expect(review).toBeVisible()
       expect(await oldCanvas!.evaluate((node) => node.isConnected)).toBe(true)
+      // A repaired paragraph on a completed page is published automatically.
+      // Its busy indicator disappears; it is not a manual refresh action.
       await expect(
         panel.getByRole('button', { name: 'Update PDF preview', exact: true })
-      ).toBeVisible()
-      await panel.getByRole('button', { name: 'Update PDF preview', exact: true }).click()
+      ).toBeHidden({ timeout: 60000 })
       await expect(
         page.locator('[data-pdf-translated-page]').first().locator('[data-pdf-text-layer]')
       ).toContainText(replacementText)
@@ -843,13 +870,7 @@ for (const variant of [
       await expect(failure).toContainText(
         'PDF generation is busy. Retry after another document finishes.'
       )
-      await openReadingView(page)
-      await expect(
-        page
-          .getByRole('group', { name: 'PDF rendition' })
-          .getByRole('button', { name: 'Compare', exact: true })
-      ).toBeEnabled()
-      await page.keyboard.press('Escape')
+      await expect(panel.getByRole('button', { name: 'Compare PDFs', exact: true })).toBeEnabled()
       await panel.getByRole('button', { name: 'Close translation', exact: true }).click()
       await expect(panel).toBeHidden()
       await expect(page.getByRole('alert')).toHaveCount(0)
@@ -1200,8 +1221,15 @@ for (const variant of [
       ).toHaveLength(0)
     }
     await page.screenshot({ path: testInfo.outputPath('paired-pdfs.png') })
+    const mountedPair = scroll
+      .locator('[data-page-number]')
+      .filter({
+        has: page.locator('[data-pdf-translated-page] canvas')
+      })
+      .first()
     const assertAligned = async (): Promise<void> => {
-      const pages = await first.locator('canvas').evaluateAll((nodes) =>
+      await expect(mountedPair.locator('canvas')).toHaveCount(2)
+      const pages = await mountedPair.locator('canvas').evaluateAll((nodes) =>
         nodes.map((n) => ({
           top: n.getBoundingClientRect().top,
           width: n.getBoundingClientRect().width,
@@ -1215,6 +1243,8 @@ for (const variant of [
     }
     await assertAligned()
     if (variant === 'standard') {
+      // This section tests shared docked sidebar sizing and its resize separator.
+      await page.setViewportSize({ width: 1600, height: 1000 })
       const translationToggle = page.getByRole('button', {
         name: 'View translation',
         exact: true
@@ -1222,10 +1252,11 @@ for (const variant of [
       const notes = page.locator('[data-pdf-notes-sidebar]')
       await translationToggle.click()
       await expect(panel).toBeVisible()
+      await expect.poll(async () => (await panel.boundingBox())?.width).toBe(320)
       const translationBounds = await panel.boundingBox()
       await page.getByRole('button', { name: 'Show notes sidebar', exact: true }).click()
       await expect(notes).toBeVisible()
-      expect(await notes.boundingBox()).toEqual(translationBounds)
+      await expect.poll(() => notes.boundingBox()).toEqual(translationBounds)
       const separator = page.getByRole('separator', { name: 'Resize notes sidebar' })
       await separator.focus()
       await page.keyboard.press('ArrowLeft')
@@ -1236,7 +1267,7 @@ for (const variant of [
       await page.screenshot({ path: testInfo.outputPath('notes-sidebar-shared-width.png') })
       await translationToggle.click()
       await expect(panel).toBeVisible()
-      expect(await panel.boundingBox()).toEqual(resizedBounds)
+      await expect.poll(() => panel.boundingBox()).toEqual(resizedBounds)
       expect(await page.locator('[data-pdf-original-view]').boundingBox()).toEqual(originalBounds)
       await page.screenshot({ path: testInfo.outputPath('translation-sidebar-shared-width.png') })
       const pdfDetails = panel.getByRole('button', {
@@ -1369,14 +1400,14 @@ for (const variant of [
     await page.mouse.wheel(0, 400)
     await expect.poll(() => scroll.evaluate((node) => node.scrollTop)).toBeGreaterThan(100)
     await assertAligned()
-    const beforeZoom = await first
+    const beforeZoom = await mountedPair
       .locator('canvas')
       .first()
       .evaluate((node) => node.getBoundingClientRect().width)
     await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
     await expect
       .poll(() =>
-        first
+        mountedPair
           .locator('canvas')
           .first()
           .evaluate((node) => node.getBoundingClientRect().width)
@@ -1384,11 +1415,11 @@ for (const variant of [
       .toBeGreaterThan(beforeZoom)
     await assertAligned()
     await selectRendition(page, 'Translation')
-    await expect(first.locator('canvas')).toHaveCount(1)
     const viewport = await scroll.boundingBox()
     await page.mouse.move(viewport!.x + viewport!.width / 2, viewport!.y + 100)
     await page.mouse.wheel(0, -3000)
     await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBe(0)
+    await expect(first.locator('canvas')).toHaveCount(1)
     await expect(first.locator('[data-pdf-text-layer]')).toContainText(
       '测量受控实验室培养物中的细胞生长。'
     )

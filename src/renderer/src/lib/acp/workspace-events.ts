@@ -105,6 +105,7 @@ const deferredArtifactEventsBySession = new Map<string, DeferredArtifactEvent[]>
 const pendingArtifactTurnUsageBySession = new Map<string, Map<string, PendingArtifactTurnUsage>>()
 const MAX_PENDING_ARTIFACT_TURNS_PER_SESSION = 16
 const scheduledAutoReviewsBySession = new Map<string, ReturnType<typeof setTimeout>>()
+const scheduledCommittedReviewRuns = new Map<string, string>()
 let autoReviewsSuppressedForQuit = false
 const AUTO_REVIEW_ARTIFACT_SETTLE_DELAY_MS = 100
 
@@ -113,6 +114,7 @@ const resetDeferredArtifactEventsForTests = (): void => {
   pendingArtifactTurnUsageBySession.clear()
   for (const timer of scheduledAutoReviewsBySession.values()) clearTimeout(timer)
   scheduledAutoReviewsBySession.clear()
+  scheduledCommittedReviewRuns.clear()
   autoReviewsSuppressedForQuit = false
 }
 
@@ -627,6 +629,9 @@ const cancelScheduledAutoReview = (sessionId: string): void => {
 
 const suppressAutoReviewsForQuit = (): void => {
   autoReviewsSuppressedForQuit = true
+  for (const sessionId of scheduledAutoReviewsBySession.keys()) {
+    scheduledCommittedReviewRuns.delete(sessionId)
+  }
   for (const timer of scheduledAutoReviewsBySession.values()) clearTimeout(timer)
   scheduledAutoReviewsBySession.clear()
 }
@@ -659,6 +664,7 @@ const scheduleCommittedRuntimeTranscriptAutoReview = (
   previous: ChatSession | undefined,
   committed: PersistedChatSession
 ): void => {
+  if (autoReviewsSuppressedForQuit) return
   if (previous && sessionRevision(committed) < sessionRevision(previous)) return
   const completedRun = committed.runtimeTranscriptLastRun
   const reviewOwner = committed.runtimeTranscriptReviewOwner
@@ -678,12 +684,16 @@ const scheduleCommittedRuntimeTranscriptAutoReview = (
     committed.activeRun ||
     committed.status === 'error' ||
     committed.resumeRecovery ||
-    (previous?.runtimeTranscriptLastRun?.promptMessageId === completedRun.promptMessageId &&
-      previous.runtimeTranscriptLastRun.startedAt === completedRun.startedAt) ||
+    committed.autoReviewEnabled !== true ||
     hasPendingDurableUserChoice(committed, completedRun.promptMessageId)
   ) {
     return
   }
+  // Hydration or a command result may project the terminal run before its lifecycle echo.
+  // Seeing that run in the store does not prove a review was scheduled for it.
+  const runKey = `${completedRun.promptMessageId}\0${completedRun.startedAt}`
+  if (scheduledCommittedReviewRuns.get(committed.id) === runKey) return
+  scheduledCommittedReviewRuns.set(committed.id, runKey)
   // The lifecycle payload is already Main's durable commit; the legacy pre-review renderer save
   // would only submit a stale whole-session projection back across the ownership boundary.
   scheduleAutoReview(committed.id, async (session) => session, undefined, completedMessage.id)

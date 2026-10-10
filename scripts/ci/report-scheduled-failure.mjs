@@ -69,6 +69,13 @@ export async function reportScheduledOutcome({
   if (!['success', 'failure'].includes(conclusion)) {
     throw new Error(`Unsupported conclusion: ${conclusion}`)
   }
+  const { data: repository } = await github.rest.repos.get(repo)
+  if (repository.has_issues === false) {
+    log(
+      `::warning::${workflowName}: tracking issue unavailable because repository Issues are disabled. Run ${runUrl} concluded ${conclusion}. Enable Issues to restore scheduled failure tracking.`
+    )
+    return { action: 'disabled' }
+  }
   const marker = trackingMarker(workflowFile)
   const existing = await findTrackingIssue({ github, repo, label, marker })
   const runDetails = describeRun({ runUrl, runAttempt, headSha })

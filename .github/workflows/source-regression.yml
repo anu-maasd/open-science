@@ -62,6 +62,19 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/functional.json
         # Leave headroom for slower macOS runners to finish every journey and teardown.
         run: npm run test:e2e:journey -- --fail-on-flaky-tests --global-timeout=900000
+      # Later Electron suites reuse and clean this directory. Preserve the first failure now.
+      - name: Preserve functional failure diagnostics
+        if: ${{ always() && steps.functional.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: source-regression-functional-${{ github.run_attempt }}
+          retention-days: 5
+          path: |
+            blob-report/functional/
+            test-results/electron/
+            test-results/functional.json
+            playwright-report/
+          if-no-files-found: warn
       - name: Run complete Mac workspace journeys
         id: workspace
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'full' }}

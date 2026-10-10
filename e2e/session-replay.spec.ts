@@ -569,7 +569,7 @@ test('opens imported research, asks about a recorded step and restores the ordin
 
 test('previews recorded DOCX inside replay and routes its iframe menu at non-default zoom', async ({
   app
-}) => {
+}, testInfo) => {
   await app.completeOnboarding()
   const page = await app.configureFakeAgent()
   await page.getByRole('button', { name: 'New project', exact: true }).click()
@@ -600,8 +600,45 @@ test('previews recorded DOCX inside replay and routes its iframe menu at non-def
   await expect(office.locator('.docx-review-counter')).toHaveText('1 / 1')
   await expect(office.locator('.docx-review-toolbar')).toHaveCSS('font-size', '14px')
   await expect(office.locator('.docx-review-toolbar')).toHaveCSS('height', '36px')
+  await office.locator('body').evaluate((body) => {
+    body.dataset.replayContextEvents = '[]'
+    document.addEventListener(
+      'contextmenu',
+      (event) => {
+        const target = event.target instanceof Element ? event.target : null
+        const events = JSON.parse(body.dataset.replayContextEvents ?? '[]')
+        events.push({
+          x: event.clientX,
+          y: event.clientY,
+          tag: target?.tagName,
+          className: target?.className,
+          text: target?.textContent?.slice(0, 120),
+          nativeControl: Boolean(
+            target?.closest(
+              'button, input, textarea, select, [data-preview-context-menu-passthrough]'
+            )
+          )
+        })
+        body.dataset.replayContextEvents = JSON.stringify(events)
+      },
+      true
+    )
+  })
   await app.setMainWindowZoomFactor(1.25)
   await office.locator('body').click({ button: 'right', position: { x: 40, y: 40 } })
+  await testInfo.attach('docx-context-hit', {
+    body: JSON.stringify(
+      await office.locator('body').evaluate((body) => ({
+        events: JSON.parse(body.dataset.replayContextEvents ?? '[]'),
+        viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
+        body: body.getBoundingClientRect().toJSON(),
+        toolbar: document.querySelector('.docx-review-toolbar')?.getBoundingClientRect().toJSON()
+      })),
+      null,
+      2
+    ),
+    contentType: 'application/json'
+  })
   const menu = page.getByTestId('replay-preview-context-menu')
   await expect(menu).toBeVisible()
   await expect(menu.getByText('Close', { exact: true })).toBeVisible()
