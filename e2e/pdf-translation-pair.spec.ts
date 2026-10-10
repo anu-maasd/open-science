@@ -697,10 +697,11 @@ for (const variant of [
       expect(directRequests).toHaveLength(requestsBeforeRetry + 1)
       await expect(review).toBeVisible()
       expect(await oldCanvas!.evaluate((node) => node.isConnected)).toBe(true)
+      // A repaired paragraph on a completed page is published automatically.
+      // Its busy indicator disappears; it is not a manual refresh action.
       await expect(
         panel.getByRole('button', { name: 'Update PDF preview', exact: true })
-      ).toBeVisible()
-      await panel.getByRole('button', { name: 'Update PDF preview', exact: true }).click()
+      ).toBeHidden({ timeout: 60000 })
       await expect(
         page.locator('[data-pdf-translated-page]').first().locator('[data-pdf-text-layer]')
       ).toContainText(replacementText)
