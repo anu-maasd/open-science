@@ -1,17 +1,16 @@
-name: Source Regression repair verification
+name: Source Regression full repair verification
 on:
   push:
-    branches: [fix/source-regression-pdf-tracking]
-  workflow_dispatch:
+    branches: [fix/source-regression-full-verification]
 permissions:
   contents: read
 concurrency:
-  group: source-regression-repair-${{ github.ref }}
+  group: source-regression-full-repair-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  focused:
+  supplemental:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -23,16 +22,58 @@ jobs:
       - run: node scripts/ci/npm-ci.mjs
       - run: npx vitest run scripts/ci/report-scheduled-failure.test.ts
       - run: npm run build:e2e
-      - run: npx playwright install chromium --only-shell
-      - name: PDF and auto-review regressions
-        env:
-          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/repair.json
-        run: npx playwright test e2e/pdf-translation-pair.spec.ts e2e/pdf-workspace-translation.spec.ts e2e/auto-review-stop-resume.spec.ts --fail-on-flaky-tests --global-timeout=3000000
+      - name: Supplemental regressions including capacity
+        id: regressions
+        continue-on-error: true
+        uses: ./.github/actions/source-regression
+        with:
+          group: regressions
+          include-capacity: 'true'
+      - name: Supplemental delegation
+        id: delegation
+        continue-on-error: true
+        uses: ./.github/actions/source-regression
+        with:
+          group: delegation
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: source-regression-repair-${{ github.run_id }}-${{ github.run_attempt }}
+          name: source-regression-full-repair-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 5
           path: |
+            blob-report/
             test-results/
             playwright-report/
+      - name: Enforce both supplemental suites
+        if: always()
+        shell: bash
+        env:
+          REGRESSIONS: ${{ steps.regressions.outcome }}
+          DELEGATION: ${{ steps.delegation.outcome }}
+        run: '[[ "$REGRESSIONS" == "success" && "$DELEGATION" == "success" ]]'
+  reporter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify reporter against actual repository metadata
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { data } = await github.rest.repos.get(context.repo)
+            if (data.has_issues) {
+              core.notice('Issues are enabled; live disabled-repository reproduction is no longer applicable.')
+              return
+            }
+            const { reportScheduledOutcome } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/report-scheduled-failure.mjs`)
+            for (const conclusion of ['failure', 'success']) {
+              const result = await reportScheduledOutcome({
+                github, repo: context.repo, workflowFile: 'source-regression-repair.yml',
+                workflowName: context.workflow, runId: context.runId,
+                runUrl: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                headSha: context.sha, conclusion, log: core.info
+              })
+              if (result.action !== 'disabled') throw new Error(`Unexpected reporter result: ${JSON.stringify(result)}`)
+            }
