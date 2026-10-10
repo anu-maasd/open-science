@@ -19,6 +19,18 @@ async function snapshot(
   })
 }
 
+test.afterEach(async ({ app }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return
+  await testInfo.attach('failure-session-and-reviews', {
+    body: JSON.stringify(await snapshot(app.page), null, 2),
+    contentType: 'application/json'
+  })
+  await testInfo.attach('failure-provider-prompts', {
+    body: JSON.stringify(await app.readFakeAgentPrompts(), null, 2),
+    contentType: 'application/json'
+  })
+})
+
 for (const scenario of [
   'ordinary stop',
   'correction stop',
