@@ -1533,6 +1533,52 @@ test('conversation follows uninterrupted replay and resumes after manual reading
   expect(Number(await progress.getAttribute('aria-valuenow'))).toBeGreaterThan(beforeSeek)
 })
 
+test('conversation keeps following when a removed return control clamps before a viewport shrink', async ({
+  page
+}) => {
+  await page.goto(`${url}?panel=1&history=1`)
+  const panel = page.getByTestId('replay-panel')
+  const conversation = panel.getByRole('region', { name: 'Historical conversation' })
+  const progress = panel.getByRole('slider', { name: 'Replay progress' })
+  const returnToCurrent = conversation.getByRole('button', { name: 'Return to current step' })
+  const expectFollowing = async (): Promise<void> => {
+    await expect(returnToCurrent).toHaveCount(0)
+    await expect
+      .poll(() =>
+        conversation.evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop)
+      )
+      .toBeLessThanOrEqual(8)
+  }
+  await panel.getByRole('button', { name: 'Enter full screen', exact: true }).click()
+  // Reach the bounded history without depending on the playback clock's frame cadence.
+  for (let i = 0; i < 16; i++) {
+    await panel.getByRole('button', { name: 'Next step', exact: true }).click()
+  }
+  await expect(page.getByTestId('replay-stage')).toHaveAttribute('data-replay-position', '16000')
+  await expectFollowing()
+  await conversation.hover()
+  await page.mouse.wheel(0, -240)
+  await expect(returnToCurrent).toBeVisible()
+  const readingTop = await conversation.evaluate((node) => node.scrollTop)
+  const pausedTime = await progress.getAttribute('aria-valuenow')
+  const originalHeight = (await conversation.boundingBox())!.height
+  await panel.evaluate((node) => {
+    ;(node.closest('[data-replay-container]') as HTMLElement).style.bottom = '10vh'
+  })
+  await expect
+    .poll(async () => (await conversation.boundingBox())!.height)
+    .toBeLessThan(originalHeight)
+  await expect.poll(() => conversation.evaluate((node) => node.scrollTop)).toBe(readingTop)
+  await conversation.hover()
+  await page.mouse.wheel(0, 100000)
+  await expectFollowing()
+  await panel.evaluate((node) => {
+    ;(node.closest('[data-replay-container]') as HTMLElement).style.bottom = '15vh'
+  })
+  await expectFollowing()
+  await expect(progress).toHaveAttribute('aria-valuenow', pausedTime!)
+})
+
 test('reveals recorded files immediately and keeps the gallery stable through delayed thumbnails without horizontal overflow', async ({
   page
 }) => {

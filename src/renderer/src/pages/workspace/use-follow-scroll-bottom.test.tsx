@@ -232,6 +232,30 @@ describe('useFollowScrollBottom', () => {
     expect(viewport.scrollTop).toBe(600)
   })
 
+  it.each([false, true])(
+    'handles a content clamp before a viewport resize notification (user scroll: %s)',
+    (userScroll) => {
+      const resize = stubResizeObserver()
+      const onFollowingChange = vi.fn()
+      render(<Harness enabled contentHeight={1000} options={{ onFollowingChange }} />)
+      const viewport = screen.getByTestId('viewport')
+      setScrollGeometry(viewport, { clientHeight: 458, scrollHeight: 2500, scrollTop: 0 })
+      resize()
+      expect(viewport.scrollTop).toBe(2042)
+      // Removing Return to current clamps using the old viewport height, then the viewport
+      // shrinks before the delayed scroll event and either ResizeObserver notification arrive.
+      setScrollGeometry(viewport, {
+        clientHeight: 422,
+        scrollHeight: 2448,
+        scrollTop: userScroll ? 1800 : 1990
+      })
+      fireEvent.scroll(viewport)
+      resize()
+      expect(viewport.scrollTop).toBe(userScroll ? 1800 : 2026)
+      expect(onFollowingChange.mock.calls).toEqual(userScroll ? [[false]] : [])
+    }
+  )
+
   it('pauses after the user leaves the bottom and resumes when they return', () => {
     const notifyResize = stubResizeObserver()
     const view = render(<Harness enabled contentHeight={1000} />)
