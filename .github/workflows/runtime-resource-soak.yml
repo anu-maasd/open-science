@@ -105,6 +105,7 @@ jobs:
     # Reusable Build declares OIDC for conditional Windows signing; callers must allow it
     # even when this run selects an unsigned or macOS-only build. Keep this job-scoped.
     permissions:
+      actions: read
       contents: read
       id-token: write
 
