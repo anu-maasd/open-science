@@ -85,12 +85,27 @@ describe('release and scheduled workflow topology', () => {
       expect(document.permissions?.['id-token']).toBeUndefined()
       for (const job of Object.values(document.jobs)) {
         if (callees.has(job.uses ?? '')) {
-          expect(job.permissions).toEqual({ contents: 'read', 'id-token': 'write' })
+          expect(job.permissions).toEqual({
+            ...(job.uses === './.github/workflows/performance-package-dryrun.yml'
+              ? { actions: 'read' }
+              : {}),
+            contents: 'read',
+            'id-token': 'write'
+          })
         } else {
           expect(job.permissions?.['id-token']).toBeUndefined()
         }
       }
     }
+  })
+
+  it('allows the packaged performance workflow read permissions before evaluating its condition', () => {
+    const caller = workflow('runtime-resource-soak.yml').jobs.packaged_performance
+    const callee = workflow('performance-package-dryrun.yml')
+    // An explicit job permissions map replaces the workflow defaults, even when its if is false.
+    const effectivePermissions =
+      caller.permissions ?? workflow('runtime-resource-soak.yml').permissions
+    expect(effectivePermissions).toMatchObject(callee.permissions!)
   })
 
   it('blocks verified Windows builds on real receipt publication and submission recovery', () => {
@@ -714,7 +729,13 @@ if ($artifactSaveBase -eq $artifactSaveCommit) {
         job.uses === './.github/workflows/build.yml' ||
         job.uses === './.github/workflows/performance-package-dryrun.yml'
       ) {
-        expect(job.permissions, id).toEqual({ contents: 'read', 'id-token': 'write' })
+        expect(job.permissions, id).toEqual({
+          ...(job.uses === './.github/workflows/performance-package-dryrun.yml'
+            ? { actions: 'read' }
+            : {}),
+          contents: 'read',
+          'id-token': 'write'
+        })
       } else {
         expect(job.permissions, id).toBeUndefined()
       }

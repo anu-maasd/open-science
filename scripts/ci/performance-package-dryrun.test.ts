@@ -42,7 +42,7 @@ it('dispatches the package plan through the existing runtime workflow without ru
   expect(workflow.jobs.packaged_performance).toEqual({
     if: "github.event_name == 'workflow_dispatch' && inputs.mode == 'package-macos-arm64'",
     uses: './.github/workflows/performance-package-dryrun.yml',
-    permissions: { contents: 'read', 'id-token': 'write' }
+    permissions: { actions: 'read', contents: 'read', 'id-token': 'write' }
   })
   expect(workflow.jobs.runtime_resource_soak.if).toContain("inputs.mode != 'package-macos-arm64'")
 })
