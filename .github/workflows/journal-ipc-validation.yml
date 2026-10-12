@@ -1,0 +1,40 @@
+name: Journal IPC Validation
+
+on:
+  push:
+    branches: [ci/journal-ipc-validation]
+
+permissions:
+  contents: read
+
+jobs:
+  journal_macos:
+    name: Current PR 1 journal IPC on macOS
+    runs-on: macos-latest
+    timeout-minutes: 35
+    env:
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: node scripts/ci/npm-ci.mjs
+      - name: Build source app
+        run: npm run build:e2e
+      - name: Repeat journal IPC lifecycle without retries
+        run: npx playwright test e2e/journal-attributes.spec.ts --grep '^resolves journals through real IPC' --repeat-each=5 --workers=1 --retries=0 --output=test-results/journal-proof --reporter=list
+      - name: Upload journal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: journal-ipc-validation
+          path: test-results
+          retention-days: 7
+          if-no-files-found: warn
