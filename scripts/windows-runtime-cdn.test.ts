@@ -78,6 +78,83 @@ it.each([
   expect(() => runtimeArchiveUrl('node', 'x64', digest, { ...destination, ...override })).toThrow()
 })
 
+it('checks reviewed catalog URLs without requiring upload configuration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cdn-readonly-'))
+  const path = join(directory, 'catalog.json')
+  try {
+    await writeFile(path, JSON.stringify(catalog))
+    for (const environment of [
+      {},
+      { CDN_BASE_URL: '', S3_PREFIX: '' },
+      { CDN_BASE_URL: destination.CDN_BASE_URL },
+      { S3_PREFIX: destination.S3_PREFIX }
+    ]) {
+      expect(await readRuntimeCatalog(environment, path, { mode: 'check' })).toEqual(catalog)
+    }
+    for (const environment of [
+      { CDN_BASE_URL: 'https://other.fixture.test' },
+      { S3_PREFIX: 'different/app' }
+    ]) {
+      await expect(readRuntimeCatalog(environment, path, { mode: 'check' })).rejects.toThrow(
+        'immutable runtime URL'
+      )
+    }
+    await expect(readRuntimeCatalog({}, path)).rejects.toThrow('CDN_BASE_URL and S3_PREFIX')
+    const invoke = vi.fn()
+    await expect(publishRuntimeArchives(directory, catalog, {}, invoke)).rejects.toThrow(
+      'CDN_BASE_URL and S3_PREFIX'
+    )
+    expect(invoke).not.toHaveBeenCalled()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it.each([
+  'http://cdn.fixture.test',
+  'https://user:pass@cdn.fixture.test',
+  'https://cdn.fixture.test/other',
+  'https://cdn.fixture.test/?query=1'
+])('rejects malformed reviewed URLs in read-only checks: %s', async (base) => {
+  const directory = await mkdtemp(join(tmpdir(), 'cdn-invalid-'))
+  const path = join(directory, 'catalog.json')
+  try {
+    const invalid = structuredClone(catalog)
+    invalid.releases[0].archive.url = catalog.releases[0].archive.url.replace(
+      destination.CDN_BASE_URL,
+      base
+    )
+    await writeFile(path, JSON.stringify(invalid))
+    await expect(readRuntimeCatalog({}, path, { mode: 'check' })).rejects.toThrow()
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it('rejects mixed CDN origins in a reviewed catalog', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cdn-mixed-'))
+  const path = join(directory, 'catalog.json')
+  try {
+    const mixed = structuredClone(catalog)
+    mixed.releases.push({
+      ...catalog.releases[0],
+      archive: {
+        ...catalog.releases[0].archive,
+        url: catalog.releases[0].archive.url.replace(
+          destination.CDN_BASE_URL,
+          'https://other.fixture.test'
+        )
+      }
+    })
+    await writeFile(path, JSON.stringify(mixed))
+    await expect(readRuntimeCatalog({}, path, { mode: 'check' })).rejects.toThrow(
+      'immutable runtime URL'
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 it('uses the same configured immutable URL for staging and publication', () => {
   expect(runtimeArchiveUrl('node', 'x64', digest, destination)).toBe(
     catalog.releases[0].archive.url
