@@ -164,7 +164,9 @@ describe('UserSkillCompatibilityIndex', () => {
 
     const index = new UserSkillCompatibilityIndex(storageRoot, { hashFile: hashFileContents })
     const [before] = await index.scan([sourceDir])
-    await writeFile(prototypePath, 'after!')
+    // This tests dictionary keys, not timestamp precision: rapid equal-size writes on Windows
+    // can retain both mtime and ctime. Make invalidation observable through the size as well.
+    await writeFile(prototypePath, 'after!!')
     const [after] = await index.scan([sourceDir])
 
     expect(after).not.toEqual(before)
