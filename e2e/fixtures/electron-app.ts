@@ -151,90 +151,105 @@ const observeElectronFlushDiagnostics = async (
 // after the exact flush that cancelled shutdown has acknowledged a successful save.
 const installRestartPersistenceRetry = async (
   application: Pick<ElectronApplication, 'evaluate'>,
-  windowId: number,
+  targetId: string,
   timeoutMs: number
 ): Promise<void> => {
-  await application.evaluate(
-    ({ app, BrowserWindow, ipcMain }, { windowId, timeoutMs }) => {
-      const window = BrowserWindow.fromId(windowId)
-      if (!window) throw new Error('Electron E2E restart window is unavailable.')
-      const contents = window.webContents
-      const originalSend = contents.send
-      const sendDescriptor = Object.getOwnPropertyDescriptor(contents, 'send')
-      let requestId: string | undefined
-      let status: string | undefined
-      let recovering = false
-      let settle: ((status: string) => void) | undefined
-      const responseChannel = 'sessions:flush-response'
-      const onResponse = (
-        event: Electron.IpcMainEvent,
-        response: { requestId?: string; status?: string }
-      ): void => {
-        if (event.sender !== contents || !requestId || response?.requestId !== requestId) return
-        if (!['completed', 'conflict', 'failed'].includes(response.status ?? '')) return
-        status = response.status
-        settle?.(status!)
-      }
-      const restore = (): void => {
-        if (sendDescriptor) Object.defineProperty(contents, 'send', sendDescriptor)
-        else Reflect.deleteProperty(contents, 'send')
-        ipcMain.removeListener(responseChannel, onResponse)
-        app.removeListener('will-quit', restore)
-      }
-      ipcMain.on(responseChannel, onResponse)
-      app.once('will-quit', restore)
-      Object.defineProperty(contents, 'send', {
-        configurable: true,
-        value: (channel: string, ...args: unknown[]) => {
-          const payload = args[0] as { requestId?: string; variant?: string } | undefined
-          if (channel === 'sessions:flush-request' && !recovering) {
-            requestId = payload?.requestId
-            status = undefined
-          }
-          if (
-            channel === 'window:close-confirm-request' &&
-            payload?.variant === 'persistence-failed' &&
-            payload.requestId &&
-            requestId &&
-            !recovering
-          ) {
-            recovering = true
-            const confirmationId = payload.requestId
-            const answer = (response: { ack: true } | { choice: 'retry' | 'cancel' }): void => {
-              ipcMain.emit(
-                'window:close-confirm-response',
-                { sender: contents },
-                {
-                  requestId: confirmationId,
-                  ...response
-                }
-              )
-            }
-            // Act as the test user through the existing confirmation protocol. Never forge a
-            // successful flush or a force-quit choice; the retry runs both production gates again.
-            answer({ ack: true })
-            void (async () => {
-              const result =
-                status ??
-                (await new Promise<string>((resolve) => {
-                  const timer = setTimeout(() => resolve('timeout'), timeoutMs)
-                  settle = (value) => {
-                    clearTimeout(timer)
-                    resolve(value)
-                  }
-                }))
-              settle = undefined
-              restore()
-              answer({ choice: result === 'completed' ? 'retry' : 'cancel' })
-            })()
-            return
-          }
-          return originalSend.call(contents, channel, ...args)
+  const install = (): Promise<void> =>
+    application.evaluate(
+      ({ app, BrowserWindow, ipcMain, webContents }, { targetId, timeoutMs }) => {
+        const targetContents = webContents.fromDevToolsTargetId(targetId)
+        const window = targetContents && BrowserWindow.fromWebContents(targetContents)
+        if (!window) throw new Error('Electron E2E restart window is unavailable.')
+        const contents = window.webContents
+        const installationKey = Symbol.for('open-science.e2e.restart-persistence-retry')
+        if (Reflect.has(contents, installationKey)) return
+        const originalSend = contents.send
+        const sendDescriptor = Object.getOwnPropertyDescriptor(contents, 'send')
+        let requestId: string | undefined
+        let status: string | undefined
+        let recovering = false
+        let settle: ((status: string) => void) | undefined
+        const responseChannel = 'sessions:flush-response'
+        const onResponse = (
+          event: Electron.IpcMainEvent,
+          response: { requestId?: string; status?: string }
+        ): void => {
+          if (event.sender !== contents || !requestId || response?.requestId !== requestId) return
+          if (!['completed', 'conflict', 'failed'].includes(response.status ?? '')) return
+          status = response.status
+          settle?.(status!)
         }
-      })
-    },
-    { windowId, timeoutMs }
-  )
+        const restore = (): void => {
+          if (Reflect.get(contents, installationKey) !== restore) return
+          Reflect.deleteProperty(contents, installationKey)
+          if (sendDescriptor) Object.defineProperty(contents, 'send', sendDescriptor)
+          else Reflect.deleteProperty(contents, 'send')
+          ipcMain.removeListener(responseChannel, onResponse)
+          app.removeListener('will-quit', restore)
+        }
+        ipcMain.on(responseChannel, onResponse)
+        app.once('will-quit', restore)
+        Object.defineProperty(contents, 'send', {
+          configurable: true,
+          value: (channel: string, ...args: unknown[]) => {
+            const payload = args[0] as { requestId?: string; variant?: string } | undefined
+            if (channel === 'sessions:flush-request' && !recovering) {
+              requestId = payload?.requestId
+              status = undefined
+            }
+            if (
+              channel === 'window:close-confirm-request' &&
+              payload?.variant === 'persistence-failed' &&
+              payload.requestId &&
+              requestId &&
+              !recovering
+            ) {
+              recovering = true
+              const confirmationId = payload.requestId
+              const answer = (response: { ack: true } | { choice: 'retry' | 'cancel' }): void => {
+                ipcMain.emit(
+                  'window:close-confirm-response',
+                  { sender: contents },
+                  {
+                    requestId: confirmationId,
+                    ...response
+                  }
+                )
+              }
+              // Act as the test user through the existing confirmation protocol. Never forge a
+              // successful flush or a force-quit choice; the retry runs both production gates again.
+              answer({ ack: true })
+              void (async () => {
+                const result =
+                  status ??
+                  (await new Promise<string>((resolve) => {
+                    const timer = setTimeout(() => resolve('timeout'), timeoutMs)
+                    settle = (value) => {
+                      clearTimeout(timer)
+                      resolve(value)
+                    }
+                  }))
+                settle = undefined
+                restore()
+                answer({ choice: result === 'completed' ? 'retry' : 'cancel' })
+              })()
+              return
+            }
+            return originalSend.call(contents, channel, ...args)
+          }
+        })
+        Object.defineProperty(contents, installationKey, { configurable: true, value: restore })
+      },
+      { targetId, timeoutMs }
+    )
+  try {
+    await install()
+  } catch (error) {
+    // CDP can lose its evaluation promise under GC after the callback already ran.
+    // Installation is idempotent; retry only this transport error once, preserving other failures.
+    if (!String(error).includes('Resulting promise was garbage collected')) throw error
+    await install()
+  }
 }
 
 type ElectronCleanupTarget = {
@@ -1721,16 +1736,15 @@ class ElectronAppHarness implements ElectronApp {
       {
         close: async () => {
           if (requireGraceful && page) {
-            const readWindowId = async (): Promise<number> =>
-              (await application.browserWindow(page)).evaluate((window) => window.id)
-            let windowId: number
+            // Resolve the exact page in one main-process evaluation instead of acquiring an
+            // inspector JSHandle that can be collected while a capacity journey is shutting down.
+            const session = await application.context().newCDPSession(page)
             try {
-              windowId = await readWindowId()
-            } catch (error) {
-              if (!String(error).includes('Resulting promise was garbage collected')) throw error
-              windowId = await readWindowId()
+              const { targetInfo } = await session.send('Target.getTargetInfo')
+              await installRestartPersistenceRetry(application, targetInfo.targetId, 5_000)
+            } finally {
+              await session.detach()
             }
-            await installRestartPersistenceRetry(application, windowId, 5_000)
           }
           await application.close()
         },
