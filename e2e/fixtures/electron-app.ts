@@ -902,8 +902,13 @@ class ElectronAppHarness implements ElectronApp {
   async completeOnboarding(): Promise<Page> {
     await this.page.evaluate(async () => {
       const bridge = globalThis as unknown as {
-        api: { settings: { markOnboardingComplete: () => Promise<unknown> } }
+        api: {
+          settings: { markOnboardingComplete: () => Promise<unknown> }
+          locale: { setPreference: (request: { preference: 'en' }) => Promise<unknown> }
+        }
       }
+      // Copy-based specs must keep English after restart even without configureFakeAgent().
+      await bridge.api.locale.setPreference({ preference: 'en' })
       await bridge.api.settings.markOnboardingComplete()
     })
     await this.page.reload({ waitUntil: 'domcontentloaded' })
