@@ -28,7 +28,9 @@ const boundary = vi.hoisted(() => ({
   settingsWait: vi.fn(),
   realPolling: false,
   readyAt: 0,
-  evaluated: vi.fn()
+  evaluated: vi.fn(),
+  cdpSend: vi.fn(),
+  cdpDetach: vi.fn()
 }))
 vi.mock('@playwright/test', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@playwright/test')>()
@@ -76,6 +78,8 @@ beforeEach(() => {
   boundary.ready.mockResolvedValue(undefined)
   boundary.settingsWait.mockResolvedValue(undefined)
   close.mockResolvedValue(undefined)
+  boundary.cdpSend.mockResolvedValue({ targetInfo: { targetId: 'fixture-page-target' } })
+  boundary.cdpDetach.mockResolvedValue(undefined)
   boundary.reap.mockResolvedValue({ reaped: false })
   boundary.processTree.mockResolvedValue({ complete: false, processes: [] })
   boundary.processTable.mockResolvedValue({ complete: false, processes: [] })
@@ -101,6 +105,9 @@ beforeEach(() => {
     return {
       firstWindow: async () => page,
       browserWindow: async () => ({ evaluate: async () => 1 }),
+      context: () => ({
+        newCDPSession: async () => ({ send: boundary.cdpSend, detach: boundary.cdpDetach })
+      }),
       evaluate: async () => logs,
       close,
       process: () => ({ pid: 12345 })
@@ -449,6 +456,8 @@ it('restarts without passing the timing label as a package file argument', async
   )
   expect(boundary.launch).toHaveBeenCalledTimes(2)
   expect(boundary.reap).not.toHaveBeenCalled()
+  expect(boundary.cdpSend).toHaveBeenCalledExactlyOnceWith('Target.getTargetInfo')
+  expect(boundary.cdpDetach).toHaveBeenCalledOnce()
   expect(boundary.launch.mock.calls[1][0].args).toEqual(boundary.launch.mock.calls[0][0].args)
 })
 
