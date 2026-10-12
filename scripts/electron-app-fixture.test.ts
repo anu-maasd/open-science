@@ -171,17 +171,32 @@ describe('Electron E2E cleanup', () => {
 describe('Electron E2E restart persistence recovery', () => {
   afterEach(() => vi.useRealTimers())
 
-  const setup = vi.fn(async () => {
+  const setup = vi.fn(async (garbageCollectedOnce = false) => {
     const app = new EventEmitter()
     const ipcMain = new EventEmitter()
     const send = vi.fn()
     const contents = { send }
-    const electron = { app, ipcMain, BrowserWindow: { fromId: () => ({ webContents: contents }) } }
-    const application = {
-      evaluate: async (script: (electron: unknown, arg: unknown) => unknown, arg: unknown) =>
-        script(electron, arg)
-    } as unknown as Pick<ElectronApplication, 'evaluate'>
-    await installRestartPersistenceRetry(application, 1, 100)
+    const electron = {
+      app,
+      ipcMain,
+      webContents: {
+        fromDevToolsTargetId: (id: string) => (id === 'target-1' ? contents : undefined)
+      },
+      BrowserWindow: { fromWebContents: (target: unknown) => ({ webContents: target }) }
+    }
+    let collected = false
+    const evaluate = vi.fn(
+      async (script: (electron: unknown, arg: unknown) => unknown, arg: unknown) => {
+        const result = await script(electron, arg)
+        if (garbageCollectedOnce && !collected) {
+          collected = true
+          throw new Error('electronApplication.evaluate: Resulting promise was garbage collected.')
+        }
+        return result
+      }
+    )
+    const application = { evaluate } as unknown as Pick<ElectronApplication, 'evaluate'>
+    await installRestartPersistenceRetry(application, 'target-1', 100)
     const answers = vi.fn()
     ipcMain.on('window:close-confirm-response', answers)
     const prompt = (): void =>
@@ -191,7 +206,59 @@ describe('Electron E2E restart persistence recovery', () => {
       })
     const respond = (requestId: string, status: string, sender: unknown = contents): boolean =>
       ipcMain.emit('sessions:flush-response', { sender }, { requestId, status })
-    return { app, ipcMain, contents, send, answers, prompt, respond }
+    return { app, ipcMain, contents, send, answers, prompt, respond, evaluate }
+  })
+
+  it('recovers one inspector GC without installing duplicate persistence handlers', async () => {
+    const h = await setup(true)
+    expect(h.evaluate).toHaveBeenCalledTimes(2)
+    expect(h.ipcMain.listenerCount('sessions:flush-response')).toBe(1)
+    expect(h.app.listenerCount('will-quit')).toBe(1)
+    h.contents.send('sessions:flush-request', { requestId: 'closing' })
+    h.prompt()
+    h.respond('closing', 'completed')
+    await Promise.resolve()
+    expect(h.answers.mock.calls.map((call) => call[1])).toEqual([
+      { requestId: 'confirmation', ack: true },
+      { requestId: 'confirmation', choice: 'retry' }
+    ])
+    expect(h.contents.send).toBe(h.send)
+    expect(h.ipcMain.listenerCount('sessions:flush-response')).toBe(0)
+    expect(h.app.listenerCount('will-quit')).toBe(0)
+  })
+
+  it('propagates repeated inspector GC after one recovery attempt', async () => {
+    const error = new Error('Resulting promise was garbage collected.')
+    const evaluate = vi.fn().mockRejectedValue(error)
+    await expect(installRestartPersistenceRetry({ evaluate }, 'target-1', 100)).rejects.toBe(error)
+    expect(evaluate).toHaveBeenCalledTimes(2)
+  })
+
+  it('propagates other inspector errors without replaying installation', async () => {
+    const error = new Error('Target closed')
+    const evaluate = vi.fn().mockRejectedValue(error)
+    await expect(installRestartPersistenceRetry({ evaluate }, 'target-1', 100)).rejects.toBe(error)
+    expect(evaluate).toHaveBeenCalledOnce()
+  })
+
+  it('rejects an unavailable page target without installing on another window', async () => {
+    const fromWebContents = vi.fn()
+    const ipcMain = new EventEmitter()
+    const app = new EventEmitter()
+    const electron = {
+      app,
+      ipcMain,
+      webContents: { fromDevToolsTargetId: () => undefined },
+      BrowserWindow: { fromWebContents }
+    }
+    const evaluate = vi.fn(async (script, arg) => script(electron, arg))
+    await expect(
+      installRestartPersistenceRetry({ evaluate }, 'missing-target', 100)
+    ).rejects.toThrow('Electron E2E restart window is unavailable.')
+    expect(evaluate).toHaveBeenCalledOnce()
+    expect(fromWebContents).not.toHaveBeenCalled()
+    expect(ipcMain.listenerCount('sessions:flush-response')).toBe(0)
+    expect(app.listenerCount('will-quit')).toBe(0)
   })
 
   it('retries once only after the matching window and request finish saving', async () => {
