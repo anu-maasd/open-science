@@ -63,6 +63,12 @@ test('records isolated startup, ACP, Notebook, and recovery resource trends', as
     await app.captureResourceTimings('acp:')
     await app.sampleResourceProfileNow()
 
+    // Recovery reopens a Session and its Agent. Compare it with the same settled workload,
+    // while preserving the empty-workspace idle phase for startup/resource measurements.
+    await app.markResourceProfilePhase('session-idle')
+    await page.waitForTimeout(phaseDurationMs)
+    await app.sampleResourceProfileNow()
+
     for (let cycle = 0; cycle < stressCycles; cycle += 1) {
       await app.markResourceProfilePhase('session-stress')
       await sendPrompt(
@@ -75,7 +81,21 @@ test('records isolated startup, ACP, Notebook, and recovery resource trends', as
       await app.sampleResourceProfileNow()
 
       await app.markResourceProfilePhase('notebook-tool')
-      await sendPrompt(page, NOTEBOOK_PROMPT, NOTEBOOK_REPLY, RUNTIME_PERFORMANCE_PROMPT_TIMEOUT_MS)
+      // This fixture uses the same reviewed Shell path as Notebook lifecycle certification.
+      // Answer its exact deterministic command; otherwise the MCP call waits for user approval.
+      await Promise.all([
+        sendPrompt(page, NOTEBOOK_PROMPT, NOTEBOOK_REPLY, RUNTIME_PERFORMANCE_PROMPT_TIMEOUT_MS),
+        (async () => {
+          const review = page.getByRole('group', {
+            name: 'Permission request: Review potentially destructive code',
+            exact: true
+          })
+          await expect(review).toContainText(
+            'node -e "setTimeout(() => console.log(\'notebook-lifecycle-e2e\'), 1500)"'
+          )
+          await review.getByRole('button', { name: 'Allow once', exact: true }).click()
+        })()
+      ])
       await app.captureResourceTimings(`notebook-${cycle + 1}:`)
       await app.sampleResourceProfileNow()
     }
@@ -115,19 +135,25 @@ test('records isolated startup, ACP, Notebook, and recovery resource trends', as
     'no more than 10% of resource samples may be incomplete'
   ).toBeLessThanOrEqual(0.1)
   const idle = summary.phases.idle
+  const sessionIdle = summary.phases['session-idle']
   const recovery = summary.phases.recovery
-  if (!idle || !recovery) throw new Error('The profile must contain idle and recovery phases.')
+  if (!idle || !sessionIdle || !recovery)
+    throw new Error('The profile must contain idle, session-idle and recovery phases.')
   expect(idle.includedSampleCount, 'idle must contain a complete resource sample').toBeGreaterThan(
     0
   )
+  expect(
+    sessionIdle.includedSampleCount,
+    'session-idle must contain a complete resource sample'
+  ).toBeGreaterThan(0)
   expect(
     recovery.includedSampleCount,
     'recovery must contain a complete resource sample'
   ).toBeGreaterThan(0)
   expect(
     recovery.processCount.last,
-    'recovery must not retain more app-owned processes than the stable idle phase'
-  ).toBeLessThanOrEqual(idle.processCount.last)
+    'recovery must not retain more app-owned processes than the stable open-Session phase'
+  ).toBeLessThanOrEqual(sessionIdle.processCount.last)
   const recoveryStorage = recovery.storage
   expect(recoveryStorage?.temporaryFileCount.last, 'recovery must leave no temporary files').toBe(0)
   expect(recoveryStorage?.temporaryBytes.last, 'recovery must leave no temporary bytes').toBe(0)
