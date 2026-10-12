@@ -28,7 +28,7 @@ jobs:
           src/main/session-package/literature.test.ts
           src/main/session-package/service.test.ts
           -t "preserves omitted-file evidence through an imported fork|round-trips Reading PDF metadata|exports shared .* PDF notes only by opt-in"
-          --maxWorkers=1 --testTimeout=60000 --hookTimeout=60000
+          --silent=false --maxWorkers=1 --testTimeout=60000 --hookTimeout=60000
           --reporter=default --reporter=json --outputFile=test-results/package-timing.json
       - name: Upload timing evidence and instrumented tests
         if: always()
@@ -41,4 +41,5 @@ jobs:
             src/main/session-package/literature.test.ts
             src/main/session-package/service.test.ts
             src/main/artifacts/provenance-test-fixtures.ts
+            src/main/projects/prisma-client.ts
           retention-days: 7
