@@ -4661,6 +4661,7 @@ it.each(['upload', 'artifact'] as const)(
     }
   },
   // This opt-in/forward/fork/receipt journey performs several real validation-database imports.
-  // Match the other multi-import tests' hosted Windows I/O budget without relaxing other tests.
-  process.platform === 'win32' ? 120_000 : 60_000
+  // Hosted Windows exceeded 120 seconds; match the adjacent 180-second multi-import budget.
+  // Keep the Unix bound and every opt-in/forward/fork/receipt assertion unchanged.
+  process.platform === 'win32' ? 180_000 : 60_000
 )

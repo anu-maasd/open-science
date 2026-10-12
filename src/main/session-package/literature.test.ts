@@ -254,8 +254,9 @@ it.each([false, true])(
     expect(reforked.sessionId).not.toBe(forked.sessionId)
   },
   // Two imports plus two forks repeatedly migrate real validation databases; Ubuntu coverage
-  // exceeded 30 seconds. Match the bounded budgets of the adjacent package round-trip suites.
-  process.platform === 'win32' ? 120_000 : 60_000
+  // exceeded 30 seconds. Hosted Windows also exceeded 120 seconds; use the existing 180-second
+  // multi-import budget only for this journey, preserving the Unix bound and all assertions.
+  process.platform === 'win32' ? 180_000 : 60_000
 )
 
 it('keeps metadata-only Literature references', () => {

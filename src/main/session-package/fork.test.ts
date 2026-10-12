@@ -342,30 +342,36 @@ it('rejects an active source without publishing a child', async () => {
   await service.close()
 })
 
-it('preserves omitted-file evidence through an imported fork and another fork', async () => {
-  const { fixture, repository, service } = await setup()
-  await fixture.stagePng('omitted bytes', 'figure.png')
-  await fixture.repository.createVersion(createArtifactVersionRequest({ filename: 'figure.png' }))
-  const path = join(fixture.storageRoot, 'compact.science')
-  await service.exportTo({ projectId: 'project-1', sessionId: 'session-1' }, path, {
-    selectFiles: async (files) =>
-      files.filter((file) => !file.requiredForEvidence).map((file) => file.storageKey)
-  })
-  const imported = await service.importFrom(path, undefined, undefined, undefined, {
-    projectId: 'project-1'
-  })
-  const first = await service.fork(imported)
-  expect(
-    (await repository.loadSession(first.projectId, first.sessionId))?.forkOrigin?.excludedFiles
-      ?.length
-  ).toBeGreaterThan(0)
-  const second = await service.fork(first)
-  expect(
-    (await repository.loadSession(second.projectId, second.sessionId))?.forkOrigin?.excludedFiles
-      ?.length
-  ).toBeGreaterThan(0)
-  await service.close()
-})
+it(
+  'preserves omitted-file evidence through an imported fork and another fork',
+  async () => {
+    const { fixture, repository, service } = await setup()
+    await fixture.stagePng('omitted bytes', 'figure.png')
+    await fixture.repository.createVersion(createArtifactVersionRequest({ filename: 'figure.png' }))
+    const path = join(fixture.storageRoot, 'compact.science')
+    await service.exportTo({ projectId: 'project-1', sessionId: 'session-1' }, path, {
+      selectFiles: async (files) =>
+        files.filter((file) => !file.requiredForEvidence).map((file) => file.storageKey)
+    })
+    const imported = await service.importFrom(path, undefined, undefined, undefined, {
+      projectId: 'project-1'
+    })
+    const first = await service.fork(imported)
+    expect(
+      (await repository.loadSession(first.projectId, first.sessionId))?.forkOrigin?.excludedFiles
+        ?.length
+    ).toBeGreaterThan(0)
+    const second = await service.fork(first)
+    expect(
+      (await repository.loadSession(second.projectId, second.sessionId))?.forkOrigin?.excludedFiles
+        ?.length
+    ).toBeGreaterThan(0)
+    await service.close()
+  },
+  // An import plus two forks builds three real validation databases. Hosted Windows COMMIT/I/O
+  // jitter exceeded the default 60-second budget; retain a finite, test-local bound.
+  process.platform === 'win32' ? 120_000 : undefined
+)
 
 it('recovers the same child after committed records fail to publish, without copying again', async () => {
   const { fixture, repository, service } = await setup()
