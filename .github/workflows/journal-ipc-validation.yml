@@ -10,7 +10,7 @@ permissions:
 jobs:
   journal_macos:
     name: Current PR 1 journal IPC on macOS
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 35
     env:
       CI: 'true'
@@ -29,7 +29,7 @@ jobs:
       - name: Build source app
         run: npm run build:e2e
       - name: Repeat journal IPC lifecycle without retries
-        run: npx playwright test e2e/journal-attributes.spec.ts --grep '^resolves journals through real IPC' --repeat-each=5 --workers=1 --retries=0 --output=test-results/journal-proof --reporter=list
+        run: npx playwright test e2e/journal-attributes.spec.ts --grep 'resolves journals through real IPC' --repeat-each=5 --workers=1 --retries=0 --output=test-results/journal-proof --reporter=list
       - name: Upload journal evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
