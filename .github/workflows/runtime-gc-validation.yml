@@ -1,0 +1,54 @@
+name: Runtime GC Validation
+
+on:
+  push:
+    branches: [ci/runtime-gc-validation]
+    paths: [.github/workflows/runtime-gc-validation.yml]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: runtime-gc-validation
+  cancel-in-progress: true
+
+jobs:
+  windows_notebook_runtime:
+    uses: ./.github/workflows/windows-notebook-runtime.yml
+
+  runtime_smoke:
+    name: Windows source smoke with restart GC fix
+    needs: windows_notebook_runtime
+    runs-on: windows-latest
+    timeout-minutes: 70
+    env:
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: node scripts/ci/npm-ci.mjs
+      - name: Download Windows Notebook runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.windows_notebook_runtime.outputs.artifact_id }}
+          path: packages/notebook-network-sandbox/vendor/windows-runtime/x64
+          merge-multiple: true
+      - name: Record source resource smoke
+        run: npm run perf:runtime -- --repeat=1 --phase-ms=2000 --interval-ms=500 --stress-cycles=1 --output=test-results/performance
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runtime-gc-validation
+          path: test-results
+          retention-days: 7
+          if-no-files-found: error
