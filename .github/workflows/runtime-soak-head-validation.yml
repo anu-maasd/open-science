@@ -1,0 +1,84 @@
+name: Runtime Soak Head Validation
+on:
+  push:
+    branches: [ci/runtime-soak-head-validation]
+    paths: [.github/workflows/runtime-soak-head-validation.yml]
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: runtime-soak-head-validation
+  cancel-in-progress: true
+jobs:
+  plan:
+    name: Select complete soak validation
+    if: github.ref == 'refs/heads/ci/runtime-soak-head-validation'
+    runs-on: ubuntu-latest
+    outputs:
+      should_test: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - id: decide
+        run: echo 'should_run=true' >> "$GITHUB_OUTPUT"
+  windows_notebook_runtime:
+    needs: plan
+    if: needs.plan.outputs.should_test == 'true' && inputs.mode != 'package-macos-arm64'
+    uses: ./.github/workflows/windows-notebook-runtime.yml
+
+  runtime_resource_soak:
+    name: Windows runtime resource ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'soak' }}
+    needs: [plan, windows_notebook_runtime]
+    if: needs.plan.outputs.should_test == 'true' && inputs.mode != 'package-macos-arm64'
+    runs-on: windows-latest
+    timeout-minutes: 70
+    env:
+      CI: 'true'
+      PROFILE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'soak' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: node scripts/ci/npm-ci.mjs
+
+      - name: Download Windows Notebook runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.windows_notebook_runtime.outputs.artifact_id }}
+          path: packages/notebook-network-sandbox/vendor/windows-runtime/x64
+          merge-multiple: true
+
+      - name: Record runtime resource profile
+        shell: pwsh
+        run: |
+          if ($env:PROFILE_MODE -eq 'smoke') {
+            $profileArgs = @('--repeat=1', '--phase-ms=2000', '--interval-ms=500', '--stress-cycles=1')
+          } else {
+            $profileArgs = @('--repeat=3', '--phase-ms=10000', '--interval-ms=1000', '--stress-cycles=6')
+          }
+          npm run perf:runtime -- @profileArgs '--output=test-results/performance'
+
+      - name: Upload runtime resource evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runtime-resource-${{ env.PROFILE_MODE }}-windows
+          path: test-results
+          retention-days: 14
+          if-no-files-found: error
+
+  packaged_performance:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'package-macos-arm64'
+    uses: ./.github/workflows/performance-package-dryrun.yml
+    # Reusable Build declares OIDC for conditional Windows signing; callers must allow it
+    # even when this run selects an unsigned or macOS-only build. Keep this job-scoped.
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
