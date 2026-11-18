@@ -50,9 +50,22 @@ function validateRuntimeCatalog(catalog, environment) {
 
 export async function readRuntimeCatalog(
   environment = process.env,
-  catalogPath = new URL('../src/main/notebook/windows-runtime-catalog.json', import.meta.url)
+  catalogPath = new URL('../src/main/notebook/windows-runtime-catalog.json', import.meta.url),
+  { mode = 'deployment' } = {}
 ) {
-  return validateRuntimeCatalog(JSON.parse(await readFile(catalogPath, 'utf8')), environment)
+  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
+  if (mode === 'check') {
+    // Read-only packaging checks consume the reviewed URLs, not an upload destination.
+    // Explicit deployment values must still agree; publication always requires both values.
+    const first = new URL(catalog.releases?.[0]?.archive?.url)
+    const prefix = first.pathname.match(/^\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\/notebook-runtime\//)?.[1]
+    environment = {
+      ...environment,
+      CDN_BASE_URL: environment.CDN_BASE_URL || first.origin,
+      S3_PREFIX: environment.S3_PREFIX || prefix
+    }
+  }
+  return validateRuntimeCatalog(catalog, environment)
 }
 
 export async function verifyRuntimeArchives(directory, catalog) {
@@ -178,7 +191,9 @@ export async function publishRuntimeArchives(
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2)
   const [mode, directory] = args
-  const catalog = await readRuntimeCatalog()
+  const catalog = await readRuntimeCatalog(process.env, undefined, {
+    mode: mode === 'check' ? 'check' : 'deployment'
+  })
   if (mode === 'check')
     await checkRuntimeCdn(catalog, fetch, { verifyBytes: args.includes('--verify-bytes') })
   else if (mode === 'verify' && directory) await verifyRuntimeArchives(resolve(directory), catalog)
